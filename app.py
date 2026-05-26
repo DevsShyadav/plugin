@@ -19,12 +19,19 @@ Session state keys used:
     st.session_state["engine"]  — singleton EngineManager instance
 """
 
+import os
+
 import streamlit as st
 
 import database as db
 from engine import EngineManager
 from ui_settings import render_settings_tab
 from ui_dashboard import render_dashboard_tab
+
+# ── Hugging Face environment detection ───────────────────────────────────────
+# HF Spaces sets the SPACE_ID environment variable automatically.
+# We use this to show a friendly first-run banner guiding users to add keys.
+IS_HF_SPACE: bool = bool(os.environ.get("SPACE_ID"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -531,13 +538,34 @@ def main() -> None:
     # 1. Inject CSS
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    # 2. Bootstrap DB + engine singleton
+    # 2. Hugging Face first-run banner
+    if IS_HF_SPACE:
+        db.init_db()
+        keys = db.get_all_api_keys()
+        no_keys = not any(v.strip() for v in keys.values())
+        if no_keys:
+            st.markdown(
+                """
+                <div style="background:#fffbea;border:1.5px solid #f0c040;border-radius:10px;
+                            padding:14px 20px;margin-bottom:1rem;font-size:0.88rem;">
+                    👋 <strong>Welcome to AI Marketing Engine on Hugging Face!</strong><br>
+                    To get started: go to the <strong>⚙️ Settings</strong> tab,
+                    enter your <a href="https://console.groq.com" target="_blank"
+                    style="color:#27ae60;">Groq API key</a> (free),
+                    add at least one plugin, then click <strong>🚀 Start Engine</strong>.
+                    <br><em>Your data is saved to persistent storage — it survives restarts.</em>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    # 3. Bootstrap DB + engine singleton
     engine = _bootstrap()
 
-    # 3. Branded header
+    # 4. Branded header
     _render_header(engine)
 
-    # 4. Main tabs
+    # 5. Main tabs
     tab_settings, tab_dashboard = st.tabs([
         "⚙️  Settings & Configuration",
         "📊  Live Dashboard & Logs",

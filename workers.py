@@ -24,6 +24,7 @@ SCRAPING NOTES:
 
 import asyncio
 import logging
+import os
 import random
 import threading
 import xmlrpc.client
@@ -95,6 +96,34 @@ REDDIT_TRIGGER_WORDS: list[str] = [
     "seo problem", "need help with wordpress", "plugin recommendation",
 ]
 
+
+
+# ---------------------------------------------------------------------------
+# Playwright browser launch args — required for Linux containers (HF Spaces)
+# ---------------------------------------------------------------------------
+# HF Spaces runs in a sandboxed Docker container. Chromium needs these flags
+# to work without a real display or root-level sandbox privileges.
+PLAYWRIGHT_LAUNCH_ARGS: dict = {
+    "headless": True,
+    "args": [
+        "--no-sandbox",                  # required in Docker/root environments
+        "--disable-setuid-sandbox",      # companion to --no-sandbox
+        "--disable-dev-shm-usage",       # /dev/shm is tiny in containers; use /tmp
+        "--disable-gpu",                 # no GPU in HF containers
+        "--no-zygote",                   # avoids fork issues in sandboxed envs
+        "--single-process",              # safer in constrained containers
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--hide-scrollbars",
+        "--metrics-recording-only",
+        "--mute-audio",
+        "--no-first-run",
+        "--safebrowsing-disable-auto-update",
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +208,7 @@ async def worker_contact_sniper(
     _log(WORKER, "Worker started.", "info")
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.chromium.launch(**PLAYWRIGHT_LAUNCH_ARGS)
 
         async with aiohttp.ClientSession() as session:
             while not stop_event.is_set():
@@ -293,7 +322,7 @@ async def worker_blog_bomber(
     _log(WORKER, "Worker started.", "info")
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.chromium.launch(**PLAYWRIGHT_LAUNCH_ARGS)
 
         async with aiohttp.ClientSession() as session:
             while not stop_event.is_set():
@@ -406,7 +435,7 @@ async def worker_youtube_hijacker(
     YT_SEARCH_BASE = "https://www.youtube.com/results?search_query="
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.chromium.launch(**PLAYWRIGHT_LAUNCH_ARGS)
 
         async with aiohttp.ClientSession() as session:
             while not stop_event.is_set():

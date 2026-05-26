@@ -1,8 +1,27 @@
-streamlit>=1.35.0
-groq>=0.9.0
-playwright>=1.44.0
-beautifulsoup4>=4.12.0
-requests>=2.31.0
-aiohttp>=3.9.0
-feedparser>=6.0.11
-lxml>=5.2.0
+# ─────────────────────────────────────────────────────────────────
+# requirements.txt — AI Marketing Engine
+# Pinned for Hugging Face Spaces stability.
+# Python 3.10+ required.
+# ─────────────────────────────────────────────────────────────────
+
+# UI
+streamlit==1.35.0
+
+# Groq AI — official async SDK
+groq==0.9.0
+
+# Browser automation (Playwright installs chromium via Dockerfile)
+playwright==1.44.0
+
+# HTML parsing
+beautifulsoup4==4.12.3
+lxml==5.2.2
+
+# Async HTTP (worker fetch calls)
+aiohttp==3.9.5
+
+# RSS feed parsing (Reddit Sniper worker)
+feedparser==6.0.11
+
+# Standard HTTP (fallback / sync calls)
+requests==2.32.3

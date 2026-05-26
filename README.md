@@ -1,6 +1,18 @@
+---
+title: AI Marketing Engine
+emoji: 🚀
+colorFrom: green
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+short_description: 24/7 Automated AI Marketing Dashboard & Lead Generation
+---
+
 # 🚀 AI Marketing Engine
 
-A **24/7 Automated AI Marketing Dashboard & Lead Generation Tool** built with Streamlit, Python asyncio, Playwright, BeautifulSoup4, and the Groq API.
+A **24/7 Automated AI Marketing Dashboard & Lead Generation Tool** built with
+Streamlit, Python asyncio, Playwright, BeautifulSoup4, and the Groq API.
 
 ---
 
@@ -15,6 +27,7 @@ plugin/
 ├── database.py          # SQLite persistence layer
 ├── ui_settings.py       # Tab 1: Settings & Configuration UI
 ├── ui_dashboard.py      # Tab 2: Live Dashboard & Logs UI
+├── Dockerfile           # HF Spaces Docker build
 ├── requirements.txt     # Python dependencies
 └── .streamlit/
     └── config.toml      # Streamlit theme (White + Green)
@@ -24,35 +37,32 @@ plugin/
 
 ## ⚙️ Setup
 
-### 1. Install dependencies
+### Local
 ```bash
 pip install -r requirements.txt
 playwright install chromium
-```
-
-### 2. Run the app
-```bash
 streamlit run app.py
 ```
+
+### Hugging Face Spaces
+1. Create a new Space → SDK: **Docker**
+2. Connect your GitHub repo (or upload files directly)
+3. Enable **Persistent Storage** in Space Settings → Storage
+4. Add your Groq API keys inside the app's Settings tab
 
 ---
 
 ## 🔑 Configuration (Tab 1 — Settings)
 
-### API Keys
-Add up to **3 Groq API keys**. The engine automatically rotates to the next key on rate-limit (429) errors — ensuring zero downtime.
+Add up to **3 Groq API keys** — the engine auto-rotates on rate-limit errors.
+Get a free key at [console.groq.com](https://console.groq.com).
 
-Get your free API key at [console.groq.com](https://console.groq.com).
-
-### Plugins
 Add unlimited plugins with:
-- **Plugin Name** — e.g. `SpeedBoost Pro`
-- **Shortlink URL** — e.g. `https://bit.ly/speedboost`
-- **Description / Selling Point** — used by the AI to match the right plugin to the right context
+- **Plugin Name**
+- **Shortlink URL**
+- **Description / Selling Point**
 
-### Master Switch
 Click **🚀 START ENGINE** to launch all 5 workers concurrently.
-Click **🛑 STOP ENGINE** for a clean graceful shutdown.
 
 ---
 
@@ -60,21 +70,11 @@ Click **🛑 STOP ENGINE** for a clean graceful shutdown.
 
 | Worker | What It Does |
 |--------|-------------|
-| **Contact Form Sniper** | Scrapes business contact pages, uses Groq to write a fear+solution pitch, submits via Playwright |
+| **Contact Form Sniper** | Scrapes business contact pages, AI-writes a fear+solution pitch, submits via Playwright |
 | **Blog Comment Bomber** | Scrapes WP plugin blogs, generates natural contextual comments, auto-submits |
-| **YouTube Hijacker** | Finds recent WP tutorial videos, generates helpful comments, posts via Playwright |
+| **YouTube Hijacker** | Finds WP tutorial videos, generates helpful comments, posts via Playwright |
 | **Pingback Engine** | Sends XML-RPC pingbacks to competitor WP blogs with your plugin URLs |
 | **Reddit Sniper** | Monitors subreddit RSS feeds for trigger words, generates sympathetic replies |
-
----
-
-## 🛠️ Customisation (TODO markers)
-
-Search for `# TODO` in `workers.py` to find all selector and authentication placeholders:
-
-- **Contact / Blog workers** — update CSS selectors to match your target site's form fields
-- **YouTube worker** — inject saved browser cookies for authentication
-- **Reddit worker** — configure PRAW (Option A) or Playwright cookies (Option B) in `_post_reddit_reply()`
 
 ---
 
@@ -87,19 +87,16 @@ Search for `# TODO` in `workers.py` to find all selector and authentication plac
 
 ---
 
-## 🗄️ Database
+## 🗄️ Persistent Storage
 
-SQLite file: `marketing_engine.db` (created automatically on first run)
-
-| Table | Purpose |
-|-------|---------|
-| `api_keys` | 3 Groq key slots (base64 obfuscated) |
-| `plugins` | Plugin registry |
-| `activity_logs` | Worker action log (auto-pruned at 500 rows) |
-| `metrics` | Running counters |
+The SQLite database (`marketing_engine.db`) is stored at `/data/marketing_engine.db`
+inside the container. Enable **Persistent Storage** in your HF Space settings to
+keep your plugins, API keys, and logs across container restarts.
 
 ---
 
 ## ⚠️ Legal Notice
 
-This tool is provided for **educational and research purposes**. Users are solely responsible for ensuring their use complies with the Terms of Service of any platform targeted (YouTube, Reddit, WordPress, etc.) and all applicable laws.
+This tool is provided for educational and research purposes. Users are solely
+responsible for ensuring their use complies with the Terms of Service of any
+platform targeted and all applicable laws.

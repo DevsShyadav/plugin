@@ -20,9 +20,16 @@ from datetime import datetime
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Database path — stored alongside the app so it persists between runs
+# Database path
 # ---------------------------------------------------------------------------
-DB_PATH = os.path.join(os.path.dirname(__file__), "marketing_engine.db")
+# On Hugging Face Spaces (Docker SDK), /data is the persistent volume.
+# It survives container restarts. Fall back to the app directory locally.
+# ---------------------------------------------------------------------------
+_HF_DATA_DIR = "/data"
+if os.path.isdir(_HF_DATA_DIR) and os.access(_HF_DATA_DIR, os.W_OK):
+    DB_PATH = os.path.join(_HF_DATA_DIR, "marketing_engine.db")
+else:
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "marketing_engine.db")
 
 # Thread-local storage so each thread gets its own SQLite connection
 # (SQLite connections are NOT safe to share across threads)
