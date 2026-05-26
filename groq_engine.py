@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Model constants — swap to any Groq-hosted model as needed
 # ---------------------------------------------------------------------------
-DEFAULT_MODEL   = "llama3-8b-8192"     # fast, cheap, good quality
-FALLBACK_MODEL  = "mixtral-8x7b-32768" # larger context window if needed
+DEFAULT_MODEL   = "llama-3.3-70b-versatile"   # latest supported Groq model
+FALLBACK_MODEL  = "llama-3.1-8b-instant"      # fast fallback
 MAX_TOKENS      = 300                   # keep responses concise
 TEMPERATURE     = 0.75                  # slight creativity, but grounded
 

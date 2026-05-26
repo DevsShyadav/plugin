@@ -1,29 +1,24 @@
 """
 database.py
 ===========
-SQLite database layer for the AI Marketing Dashboard.
-Handles all persistence: API keys, plugins, logs, and metrics counters.
-
+SQLite database layer — AI Marketing Dashboard
 Tables:
-    - api_keys      : Stores up to 3 Groq API keys (encrypted at rest via base64 obfuscation)
-    - plugins       : Dynamic plugin registry (name, shortlink, description)
-    - activity_logs : Timestamped worker action log entries
-    - metrics       : Running counters for forms, comments, pingbacks
+    api_keys      — 3 Groq key slots
+    plugins       — plugin registry
+    plugin_stats  — per-plugin per-platform action tracking
+    activity_logs — timestamped worker log entries
+    metrics       — global running counters
 """
 
 import sqlite3
 import threading
 import base64
-import json
 import os
 from datetime import datetime
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Database path
-# ---------------------------------------------------------------------------
-# On Hugging Face Spaces (Docker SDK), /data is the persistent volume.
-# It survives container restarts. Fall back to the app directory locally.
+# DB Path — uses /data on HF Spaces (persistent volume), else local
 # ---------------------------------------------------------------------------
 _HF_DATA_DIR = "/data"
 if os.path.isdir(_HF_DATA_DIR) and os.access(_HF_DATA_DIR, os.W_OK):
@@ -31,54 +26,34 @@ if os.path.isdir(_HF_DATA_DIR) and os.access(_HF_DATA_DIR, os.W_OK):
 else:
     DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "marketing_engine.db")
 
-# Thread-local storage so each thread gets its own SQLite connection
-# (SQLite connections are NOT safe to share across threads)
 _local = threading.local()
 
 
-# ---------------------------------------------------------------------------
-# Connection helper
-# ---------------------------------------------------------------------------
-
 def get_connection() -> sqlite3.Connection:
-    """
-    Return a per-thread SQLite connection with row_factory set to
-    sqlite3.Row so columns are accessible by name.
-    """
     if not hasattr(_local, "conn") or _local.conn is None:
         _local.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _local.conn.row_factory = sqlite3.Row
-        _local.conn.execute("PRAGMA journal_mode=WAL")   # better concurrency
+        _local.conn.execute("PRAGMA journal_mode=WAL")
         _local.conn.execute("PRAGMA foreign_keys=ON")
     return _local.conn
 
 
-# ---------------------------------------------------------------------------
-# Schema bootstrap — call once at app startup
-# ---------------------------------------------------------------------------
-
 def init_db() -> None:
-    """Create all tables if they don't already exist."""
     conn = get_connection()
-    cursor = conn.cursor()
+    c = conn.cursor()
 
-    # --- API Keys table (single row, slot-based) ---------------------------
-    cursor.execute("""
+    # API Keys
+    c.execute("""
         CREATE TABLE IF NOT EXISTS api_keys (
-            slot    INTEGER PRIMARY KEY,   -- 1, 2, or 3
+            slot    INTEGER PRIMARY KEY,
             key_val TEXT NOT NULL DEFAULT ''
         )
     """)
-
-    # Pre-populate 3 empty slots so we can always UPDATE instead of INSERT
     for slot in (1, 2, 3):
-        cursor.execute(
-            "INSERT OR IGNORE INTO api_keys (slot, key_val) VALUES (?, ?)",
-            (slot, "")
-        )
+        c.execute("INSERT OR IGNORE INTO api_keys (slot, key_val) VALUES (?, ?)", (slot, ""))
 
-    # --- Plugins table ------------------------------------------------------
-    cursor.execute("""
+    # Plugins
+    c.execute("""
         CREATE TABLE IF NOT EXISTS plugins (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT NOT NULL,
@@ -88,19 +63,32 @@ def init_db() -> None:
         )
     """)
 
-    # --- Activity logs table ------------------------------------------------
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS activity_logs (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp  TEXT NOT NULL DEFAULT (datetime('now')),
-            worker     TEXT NOT NULL,
-            status     TEXT NOT NULL,   -- 'success' | 'error' | 'info'
-            message    TEXT NOT NULL
+    # Per-plugin per-platform stats  ← NEW
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS plugin_stats (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            plugin_id   INTEGER NOT NULL,
+            platform    TEXT NOT NULL,
+            action      TEXT NOT NULL,
+            target_url  TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (plugin_id) REFERENCES plugins(id) ON DELETE CASCADE
         )
     """)
 
-    # --- Metrics table (single row, always id=1) ---------------------------
-    cursor.execute("""
+    # Activity logs
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            worker    TEXT NOT NULL,
+            status    TEXT NOT NULL,
+            message   TEXT NOT NULL
+        )
+    """)
+
+    # Global metrics
+    c.execute("""
         CREATE TABLE IF NOT EXISTS metrics (
             id              INTEGER PRIMARY KEY DEFAULT 1,
             forms_filled    INTEGER NOT NULL DEFAULT 0,
@@ -108,216 +96,217 @@ def init_db() -> None:
             pingbacks_sent  INTEGER NOT NULL DEFAULT 0
         )
     """)
-
-    # Pre-populate the single metrics row
-    cursor.execute(
-        "INSERT OR IGNORE INTO metrics (id, forms_filled, comments_posted, pingbacks_sent) "
-        "VALUES (1, 0, 0, 0)"
-    )
-
+    c.execute("INSERT OR IGNORE INTO metrics VALUES (1, 0, 0, 0)")
     conn.commit()
 
 
 # ---------------------------------------------------------------------------
-# Lightweight obfuscation helpers (NOT encryption — just avoids plain-text
-# storage of API keys in case someone casually opens the .db file)
+# Obfuscation
 # ---------------------------------------------------------------------------
+def _obfuscate(v: str) -> str:
+    return base64.b64encode(v.encode()).decode() if v else ""
 
-def _obfuscate(value: str) -> str:
-    """Base64-encode a string for light obfuscation."""
-    return base64.b64encode(value.encode()).decode() if value else ""
-
-
-def _deobfuscate(value: str) -> str:
-    """Decode a base64-encoded string."""
+def _deobfuscate(v: str) -> str:
     try:
-        return base64.b64decode(value.encode()).decode() if value else ""
+        return base64.b64decode(v.encode()).decode() if v else ""
     except Exception:
-        return value   # fallback: return as-is if decode fails
+        return v
 
 
 # ---------------------------------------------------------------------------
-# API Key CRUD
+# API Keys
 # ---------------------------------------------------------------------------
-
 def save_api_key(slot: int, key_value: str) -> None:
-    """Persist an API key to a given slot (1–3)."""
     conn = get_connection()
-    conn.execute(
-        "UPDATE api_keys SET key_val = ? WHERE slot = ?",
-        (_obfuscate(key_value), slot)
-    )
+    conn.execute("UPDATE api_keys SET key_val = ? WHERE slot = ?", (_obfuscate(key_value), slot))
     conn.commit()
-
 
 def get_api_key(slot: int) -> str:
-    """Retrieve and decode an API key from a slot (1–3). Returns '' if empty."""
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT key_val FROM api_keys WHERE slot = ?", (slot,)
-    ).fetchone()
+    row = get_connection().execute("SELECT key_val FROM api_keys WHERE slot = ?", (slot,)).fetchone()
     return _deobfuscate(row["key_val"]) if row else ""
 
-
 def get_all_api_keys() -> dict:
-    """
-    Return all 3 API keys as a dict: {1: 'key_or_empty', 2: ..., 3: ...}
-    """
     return {slot: get_api_key(slot) for slot in (1, 2, 3)}
 
 
 # ---------------------------------------------------------------------------
-# Plugin CRUD
+# Plugins
 # ---------------------------------------------------------------------------
-
 def add_plugin(name: str, shortlink: str, description: str) -> int:
-    """Insert a new plugin. Returns the new row's id."""
     conn = get_connection()
-    cursor = conn.execute(
+    cur = conn.execute(
         "INSERT INTO plugins (name, shortlink, description) VALUES (?, ?, ?)",
         (name.strip(), shortlink.strip(), description.strip())
     )
     conn.commit()
-    return cursor.lastrowid
-
+    return cur.lastrowid
 
 def delete_plugin(plugin_id: int) -> None:
-    """Delete a plugin by its primary key."""
     conn = get_connection()
     conn.execute("DELETE FROM plugins WHERE id = ?", (plugin_id,))
     conn.commit()
 
-
 def get_all_plugins() -> list[dict]:
-    """
-    Return all plugins as a list of dicts with keys:
-    id, name, shortlink, description, created_at
-    """
-    conn = get_connection()
-    rows = conn.execute(
+    rows = get_connection().execute(
         "SELECT id, name, shortlink, description, created_at FROM plugins ORDER BY id"
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
-# Activity Log CRUD
+# Plugin Stats  ← NEW — per-plugin per-platform tracking
 # ---------------------------------------------------------------------------
+def record_plugin_action(plugin_id: int, platform: str, action: str, target_url: str = "") -> None:
+    """
+    Record every action taken for a plugin.
+    platform: 'contact_form' | 'blog_comment' | 'youtube' | 'pingback' | 'reddit'
+    action:   'submitted'    | 'commented'    | 'commented'| 'sent'     | 'replied'
+    """
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO plugin_stats (plugin_id, platform, action, target_url) VALUES (?, ?, ?, ?)",
+        (plugin_id, platform, action, target_url)
+    )
+    conn.commit()
 
+def get_plugin_stats(plugin_id: int) -> dict:
+    """
+    Returns stats for a single plugin:
+    {
+        'total': int,
+        'by_platform': {'contact_form': n, 'blog_comment': n, ...},
+        'recent': [{'platform', 'action', 'target_url', 'created_at'}, ...]
+    }
+    """
+    conn = get_connection()
+
+    total_row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM plugin_stats WHERE plugin_id = ?", (plugin_id,)
+    ).fetchone()
+    total = total_row["cnt"] if total_row else 0
+
+    platform_rows = conn.execute(
+        "SELECT platform, COUNT(*) as cnt FROM plugin_stats WHERE plugin_id = ? GROUP BY platform",
+        (plugin_id,)
+    ).fetchall()
+    by_platform = {r["platform"]: r["cnt"] for r in platform_rows}
+
+    recent_rows = conn.execute(
+        "SELECT platform, action, target_url, created_at FROM plugin_stats "
+        "WHERE plugin_id = ? ORDER BY id DESC LIMIT 20",
+        (plugin_id,)
+    ).fetchall()
+    recent = [dict(r) for r in recent_rows]
+
+    return {"total": total, "by_platform": by_platform, "recent": recent}
+
+def get_all_plugin_stats_summary() -> list[dict]:
+    """
+    Returns a summary row per plugin joining plugins + plugin_stats counts.
+    Used for the dashboard overview table.
+    """
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT
+            p.id,
+            p.name,
+            p.shortlink,
+            COUNT(ps.id)                                        AS total_actions,
+            SUM(CASE WHEN ps.platform='contact_form'  THEN 1 ELSE 0 END) AS forms,
+            SUM(CASE WHEN ps.platform='blog_comment'  THEN 1 ELSE 0 END) AS blog_comments,
+            SUM(CASE WHEN ps.platform='youtube'       THEN 1 ELSE 0 END) AS yt_comments,
+            SUM(CASE WHEN ps.platform='pingback'      THEN 1 ELSE 0 END) AS pingbacks,
+            SUM(CASE WHEN ps.platform='reddit'        THEN 1 ELSE 0 END) AS reddit_replies,
+            MAX(ps.created_at)                                  AS last_action
+        FROM plugins p
+        LEFT JOIN plugin_stats ps ON ps.plugin_id = p.id
+        GROUP BY p.id
+        ORDER BY total_actions DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+def get_platform_totals() -> dict:
+    """Global totals across all plugins by platform."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT platform, COUNT(*) as cnt FROM plugin_stats GROUP BY platform"
+    ).fetchall()
+    return {r["platform"]: r["cnt"] for r in rows}
+
+def get_daily_activity(days: int = 14) -> list[dict]:
+    """Returns daily action counts for the last N days (for sparkline chart)."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT DATE(created_at) as day, COUNT(*) as cnt
+        FROM plugin_stats
+        WHERE created_at >= DATE('now', ? || ' days')
+        GROUP BY day
+        ORDER BY day ASC
+    """, (f"-{days}",)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Activity Logs
+# ---------------------------------------------------------------------------
 def add_log(worker: str, message: str, status: str = "info") -> None:
-    """
-    Append a log entry. Status should be 'success', 'error', or 'info'.
-    Keeps only the latest 500 rows to prevent unbounded growth.
-    """
     conn = get_connection()
     conn.execute(
         "INSERT INTO activity_logs (worker, status, message) VALUES (?, ?, ?)",
         (worker, status, message)
     )
-    # Prune oldest rows beyond 500
     conn.execute("""
-        DELETE FROM activity_logs
-        WHERE id NOT IN (
+        DELETE FROM activity_logs WHERE id NOT IN (
             SELECT id FROM activity_logs ORDER BY id DESC LIMIT 500
         )
     """)
     conn.commit()
 
-
 def get_recent_logs(limit: int = 100) -> list[dict]:
-    """
-    Return the most recent log entries (newest-first).
-    Each dict: id, timestamp, worker, status, message
-    """
-    conn = get_connection()
-    rows = conn.execute(
+    rows = get_connection().execute(
         "SELECT id, timestamp, worker, status, message "
-        "FROM activity_logs ORDER BY id DESC LIMIT ?",
-        (limit,)
+        "FROM activity_logs ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
-    # Reverse so newest is at the bottom (terminal-style)
-    return [dict(row) for row in reversed(rows)]
-
+    return [dict(r) for r in reversed(rows)]
 
 def get_log_count() -> int:
-    """Return total number of log entries stored."""
-    conn = get_connection()
-    row = conn.execute("SELECT COUNT(*) as cnt FROM activity_logs").fetchone()
+    row = get_connection().execute("SELECT COUNT(*) as cnt FROM activity_logs").fetchone()
     return row["cnt"] if row else 0
 
+def get_logs_as_text(limit: int = 100) -> str:
+    logs = get_recent_logs(limit)
+    if not logs:
+        return "No activity yet. Start the engine to begin.\n"
+    lines = []
+    for e in logs:
+        try:
+            ts = datetime.fromisoformat(e["timestamp"]).strftime("%I:%M:%S %p")
+        except Exception:
+            ts = e["timestamp"]
+        icon = {"success": "✅", "error": "❌", "info": "ℹ️ "}.get(e["status"], "•")
+        lines.append(f"[{ts}] {icon} [{e['worker']}] {e['message']}")
+    return "\n".join(lines)
+
 
 # ---------------------------------------------------------------------------
-# Metrics CRUD
+# Global Metrics
 # ---------------------------------------------------------------------------
-
 def increment_metric(field: str, amount: int = 1) -> None:
-    """
-    Atomically increment one of the three metric counters.
-    field must be 'forms_filled', 'comments_posted', or 'pingbacks_sent'.
-    """
     allowed = {"forms_filled", "comments_posted", "pingbacks_sent"}
     if field not in allowed:
-        raise ValueError(f"Invalid metric field: {field!r}. Must be one of {allowed}")
-    conn = get_connection()
-    conn.execute(
-        f"UPDATE metrics SET {field} = {field} + ? WHERE id = 1",
-        (amount,)
+        raise ValueError(f"Invalid metric: {field}")
+    get_connection().execute(
+        f"UPDATE metrics SET {field} = {field} + ? WHERE id = 1", (amount,)
     )
-    conn.commit()
-
+    get_connection().commit()
 
 def get_metrics() -> dict:
-    """
-    Return the current metrics as a dict:
-    {'forms_filled': int, 'comments_posted': int, 'pingbacks_sent': int}
-    """
-    conn = get_connection()
-    row = conn.execute(
+    row = get_connection().execute(
         "SELECT forms_filled, comments_posted, pingbacks_sent FROM metrics WHERE id = 1"
     ).fetchone()
     return dict(row) if row else {"forms_filled": 0, "comments_posted": 0, "pingbacks_sent": 0}
 
-
 def reset_metrics() -> None:
-    """Zero out all metric counters (useful for fresh runs)."""
     conn = get_connection()
-    conn.execute(
-        "UPDATE metrics SET forms_filled = 0, comments_posted = 0, pingbacks_sent = 0 WHERE id = 1"
-    )
+    conn.execute("UPDATE metrics SET forms_filled=0, comments_posted=0, pingbacks_sent=0 WHERE id=1")
     conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# Convenience: export logs as plain text for the UI terminal
-# ---------------------------------------------------------------------------
-
-def get_logs_as_text(limit: int = 100) -> str:
-    """
-    Return recent logs formatted as a terminal-style multiline string.
-    Example line:
-        [2024-06-01 10:05:32] [Worker_Blog_Bomber] [SUCCESS] Found post at example.com
-    """
-    logs = get_recent_logs(limit)
-    if not logs:
-        return "No activity yet. Start the engine to begin.\n"
-
-    lines = []
-    for entry in logs:
-        # Parse stored ISO timestamp and reformat to HH:MM:SS
-        try:
-            dt = datetime.fromisoformat(entry["timestamp"])
-            ts = dt.strftime("%I:%M:%S %p")
-        except Exception:
-            ts = entry["timestamp"]
-
-        status_icon = {
-            "success": "✅",
-            "error":   "❌",
-            "info":    "ℹ️ ",
-        }.get(entry["status"], "•")
-
-        lines.append(
-            f"[{ts}] {status_icon} [{entry['worker']}] {entry['message']}"
-        )
-
-    return "\n".join(lines)

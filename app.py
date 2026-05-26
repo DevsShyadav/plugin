@@ -1,585 +1,458 @@
 """
-app.py
-======
-Main entry point for the 24/7 AI Marketing Dashboard.
-
-Run with:
-    streamlit run app.py
-
-Architecture recap:
-    • app.py          — Streamlit page config, CSS injection, tab router
-    • ui_settings.py  — Tab 1: Settings & Configuration
-    • ui_dashboard.py — Tab 2: Live Dashboard & Logs
-    • engine.py       — EngineManager (asyncio thread bridge)
-    • workers.py      — 5 async background workers
-    • groq_engine.py  — Groq key rotator + prompt builders
-    • database.py     — SQLite persistence layer
-
-Session state keys used:
-    st.session_state["engine"]  — singleton EngineManager instance
+app.py — AI Marketing Engine
+Premium dark + green theme with sidebar navigation.
 """
 
 import os
-
 import streamlit as st
-
 import database as db
 from engine import EngineManager
-from ui_settings import render_settings_tab
 from ui_dashboard import render_dashboard_tab
+from ui_settings import render_settings_tab
 
-# ── Hugging Face environment detection ───────────────────────────────────────
-# HF Spaces sets the SPACE_ID environment variable automatically.
-# We use this to show a friendly first-run banner guiding users to add keys.
 IS_HF_SPACE: bool = bool(os.environ.get("SPACE_ID"))
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE CONFIG  (must be the very first Streamlit call)
-# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AI Marketing Engine",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CUSTOM CSS  — White + Green theme
-# ─────────────────────────────────────────────────────────────────────────────
-CUSTOM_CSS = """
+# ─────────────────────────────────────────────────────────────────
+# PREMIUM CSS — Dark #0f1117 + Neon Green #00ff88
+# ─────────────────────────────────────────────────────────────────
+st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* ── Google Font ── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* ── GLOBAL ── */
+html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
 
-/* ══════════════════════════════════════════════════
-   GLOBAL RESET & BASE
-══════════════════════════════════════════════════ */
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif !important;
-}
-
-/* Force white background everywhere */
-.stApp,
-.main .block-container,
-section[data-testid="stSidebar"],
+.stApp, .main .block-container,
 div[data-testid="stAppViewContainer"] {
-    background-color: #FFFFFF !important;
+    background-color: #0f1117 !important;
+    color: #e2e8f0 !important;
 }
-
-/* Remove default top padding */
 .main .block-container {
-    padding-top: 1.5rem !important;
+    padding-top: 1rem !important;
     padding-bottom: 2rem !important;
-    max-width: 1400px !important;
+    max-width: 1600px !important;
 }
 
-/* ══════════════════════════════════════════════════
-   HEADER / LOGO BAR
-══════════════════════════════════════════════════ */
-.app-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.5rem;
-    background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 4px 15px rgba(46, 204, 113, 0.25);
+/* ── SIDEBAR ── */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0a0e14 0%, #0f1117 100%) !important;
+    border-right: 1px solid #1e2530 !important;
+    min-width: 260px !important;
 }
-.app-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+section[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+section[data-testid="stSidebar"] .stRadio label {
+    font-size: 0.9rem !important;
+    padding: 8px 12px !important;
+    border-radius: 8px !important;
+    cursor: pointer !important;
+    transition: all 0.2s !important;
+    display: block !important;
 }
-.app-header-logo {
-    font-size: 2rem;
-    line-height: 1;
-}
-.app-header-title {
-    color: #FFFFFF;
-    font-size: 1.45rem;
-    font-weight: 700;
-    letter-spacing: -0.3px;
-    margin: 0;
-}
-.app-header-subtitle {
-    color: rgba(255,255,255,0.85);
-    font-size: 0.78rem;
-    margin: 0;
-    font-weight: 400;
-}
-.app-header-status {
-    background: rgba(255,255,255,0.2);
-    border: 1px solid rgba(255,255,255,0.4);
-    border-radius: 20px;
-    padding: 6px 16px;
-    color: #FFFFFF;
-    font-size: 0.82rem;
-    font-weight: 500;
-    backdrop-filter: blur(4px);
+section[data-testid="stSidebar"] .stRadio label:hover {
+    background: rgba(0,255,136,0.08) !important;
+    color: #00ff88 !important;
 }
 
-/* ══════════════════════════════════════════════════
-   STREAMLIT TABS
-══════════════════════════════════════════════════ */
+/* ── TABS ── */
 div[data-testid="stTabs"] button[role="tab"] {
-    font-size: 0.92rem !important;
-    font-weight: 600 !important;
-    color: #555 !important;
-    padding: 10px 20px !important;
+    background: #161b22 !important;
+    color: #8b949e !important;
+    border: 1px solid #21262d !important;
     border-radius: 8px 8px 0 0 !important;
-    border: none !important;
-    background: transparent !important;
-    transition: all 0.2s ease !important;
-}
-div[data-testid="stTabs"] button[role="tab"]:hover {
-    color: #27ae60 !important;
-    background: rgba(46, 204, 113, 0.08) !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    padding: 10px 20px !important;
+    transition: all 0.2s !important;
 }
 div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-    color: #27ae60 !important;
-    border-bottom: 3px solid #27ae60 !important;
-    background: rgba(46, 204, 113, 0.06) !important;
+    background: #0d1117 !important;
+    color: #00ff88 !important;
+    border-bottom: 2px solid #00ff88 !important;
+}
+div[data-testid="stTabs"] button[role="tab"]:hover {
+    color: #00ff88 !important;
+    background: rgba(0,255,136,0.05) !important;
 }
 
-/* ══════════════════════════════════════════════════
-   BUTTONS
-══════════════════════════════════════════════════ */
-/* Primary green button */
+/* ── BUTTONS ── */
 div[data-testid="stButton"] > button[kind="primary"],
 div[data-testid="stFormSubmitButton"] > button {
-    background: linear-gradient(135deg, #27ae60, #2ecc71) !important;
-    color: #FFFFFF !important;
+    background: linear-gradient(135deg, #00c96b, #00ff88) !important;
+    color: #0a0e14 !important;
     border: none !important;
     border-radius: 8px !important;
-    font-weight: 600 !important;
+    font-weight: 700 !important;
     font-size: 0.9rem !important;
-    padding: 0.55rem 1.2rem !important;
-    transition: all 0.2s ease !important;
-    box-shadow: 0 2px 8px rgba(46, 204, 113, 0.3) !important;
+    padding: 0.6rem 1.4rem !important;
+    box-shadow: 0 0 20px rgba(0,255,136,0.3) !important;
+    transition: all 0.2s !important;
 }
-div[data-testid="stButton"] > button[kind="primary"]:hover,
-div[data-testid="stFormSubmitButton"] > button:hover {
+div[data-testid="stButton"] > button[kind="primary"]:hover {
+    box-shadow: 0 0 30px rgba(0,255,136,0.5) !important;
     transform: translateY(-1px) !important;
-    box-shadow: 0 4px 15px rgba(46, 204, 113, 0.45) !important;
 }
-
-/* Secondary / default buttons */
-div[data-testid="stButton"] > button[kind="secondary"],
 div[data-testid="stButton"] > button:not([kind="primary"]) {
-    background: #FFFFFF !important;
-    color: #27ae60 !important;
-    border: 1.5px solid #27ae60 !important;
+    background: #161b22 !important;
+    color: #00ff88 !important;
+    border: 1px solid #00ff88 !important;
     border-radius: 8px !important;
     font-weight: 600 !important;
-    transition: all 0.2s ease !important;
+    transition: all 0.2s !important;
 }
-div[data-testid="stButton"] > button[kind="secondary"]:hover,
 div[data-testid="stButton"] > button:not([kind="primary"]):hover {
-    background: rgba(46, 204, 113, 0.08) !important;
+    background: rgba(0,255,136,0.1) !important;
+    box-shadow: 0 0 15px rgba(0,255,136,0.2) !important;
 }
 
-/* Stop engine button — red accent */
-div[data-testid="stButton"] > button[kind="secondary"]#engine_stop_btn {
-    color: #e74c3c !important;
-    border-color: #e74c3c !important;
-}
-
-/* ══════════════════════════════════════════════════
-   INPUTS & TEXT AREAS
-══════════════════════════════════════════════════ */
+/* ── INPUTS ── */
 div[data-testid="stTextInput"] input,
-div[data-testid="stTextArea"] textarea {
-    border: 1.5px solid #e0e0e0 !important;
+div[data-testid="stTextArea"] textarea,
+div[data-testid="stSelectbox"] > div {
+    background: #161b22 !important;
+    border: 1px solid #21262d !important;
     border-radius: 8px !important;
+    color: #e2e8f0 !important;
     font-size: 0.88rem !important;
-    background: #fafafa !important;
-    transition: border-color 0.2s ease !important;
 }
 div[data-testid="stTextInput"] input:focus,
 div[data-testid="stTextArea"] textarea:focus {
-    border-color: #27ae60 !important;
-    box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.12) !important;
-    background: #FFFFFF !important;
+    border-color: #00ff88 !important;
+    box-shadow: 0 0 0 3px rgba(0,255,136,0.15) !important;
 }
 
-/* ══════════════════════════════════════════════════
-   SECTION DIVIDER
-══════════════════════════════════════════════════ */
-hr.section-divider {
-    border: none !important;
-    border-top: 2px solid #f0f0f0 !important;
-    margin: 0.3rem 0 1.2rem 0 !important;
+/* ── METRICS ── */
+div[data-testid="stMetric"] {
+    background: #161b22 !important;
+    border: 1px solid #21262d !important;
+    border-radius: 12px !important;
+    padding: 16px !important;
+}
+div[data-testid="stMetric"] label { color: #8b949e !important; font-size: 0.8rem !important; }
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+    color: #00ff88 !important;
+    font-size: 1.8rem !important;
+    font-weight: 800 !important;
 }
 
-/* ══════════════════════════════════════════════════
-   SUB-LABELS
-══════════════════════════════════════════════════ */
-p.sub-label {
-    color: #888;
-    font-size: 0.83rem;
-    margin-top: -0.5rem;
-    margin-bottom: 1rem;
+/* ── DATAFRAME ── */
+div[data-testid="stDataFrame"] { border-radius: 10px !important; overflow: hidden !important; }
+div[data-testid="stDataFrame"] th {
+    background: #161b22 !important;
+    color: #00ff88 !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+}
+div[data-testid="stDataFrame"] td {
+    background: #0d1117 !important;
+    color: #e2e8f0 !important;
+    font-size: 0.83rem !important;
+    border-color: #21262d !important;
 }
 
-/* ══════════════════════════════════════════════════
-   PLUGIN TABLE ROWS
-══════════════════════════════════════════════════ */
-span.plugin-id {
-    display: inline-block;
-    background: #f0faf4;
-    color: #27ae60;
-    border-radius: 4px;
-    padding: 2px 6px;
+/* ── EXPANDER ── */
+div[data-testid="stExpander"] {
+    background: #161b22 !important;
+    border: 1px solid #21262d !important;
+    border-radius: 10px !important;
+}
+div[data-testid="stExpander"] summary { color: #e2e8f0 !important; font-weight: 600 !important; }
+
+/* ── ALERTS ── */
+div[data-testid="stAlert"] { border-radius: 8px !important; font-size: 0.87rem !important; }
+div[data-testid="stAlert"][data-baseweb="notification"] {
+    background: #161b22 !important;
+    border: 1px solid #21262d !important;
+}
+
+/* ── DIVIDER ── */
+hr { border-color: #21262d !important; margin: 0.5rem 0 1rem 0 !important; }
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #00ff88; border-radius: 3px; opacity: 0.6; }
+
+/* ── HIDE BRANDING ── */
+#MainMenu, footer, header { visibility: hidden; }
+
+/* ── CARD COMPONENT ── */
+.premium-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 20px 22px;
+    margin-bottom: 12px;
+    transition: all 0.2s;
+}
+.premium-card:hover {
+    border-color: #00ff88;
+    box-shadow: 0 0 20px rgba(0,255,136,0.1);
+}
+.premium-card .card-title {
     font-size: 0.78rem;
     font-weight: 700;
-}
-span.plugin-name {
-    font-weight: 600;
-    font-size: 0.88rem;
-    color: #1a1a2e;
-}
-a.plugin-link {
-    color: #27ae60 !important;
-    font-size: 0.82rem;
-    text-decoration: none !important;
-    word-break: break-all;
-}
-a.plugin-link:hover { text-decoration: underline !important; }
-span.plugin-desc {
-    color: #666;
-    font-size: 0.82rem;
-}
-div.plugin-row-divider {
-    border-top: 1px solid #f5f5f5;
-    margin: 6px 0;
-}
-p.plugin-count {
-    color: #aaa;
-    font-size: 0.78rem;
-    text-align: right;
-    margin-top: 0.5rem;
-}
-
-/* ══════════════════════════════════════════════════
-   MASTER SWITCH CARD
-══════════════════════════════════════════════════ */
-div.master-switch-card {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 1rem;
-}
-div.engine-status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 14px 32px;
-    border-radius: 40px;
-    font-size: 1.05rem;
-    font-weight: 600;
-    letter-spacing: 0.2px;
-}
-div.status-running {
-    background: linear-gradient(135deg, #e8f8f0, #d4f5e2);
-    color: #1e8449;
-    border: 2px solid #27ae60;
-    box-shadow: 0 0 0 4px rgba(46, 204, 113, 0.12);
-}
-div.status-stopped {
-    background: #fdf2f2;
-    color: #c0392b;
-    border: 2px solid #e74c3c;
-}
-
-/* ── Active worker checklist ── */
-div.worker-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    border-radius: 6px;
-    background: #f9fffe;
-    border: 1px solid #e8f8f0;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 1px;
     margin-bottom: 6px;
-    font-size: 0.85rem;
 }
-span.worker-dot {
-    color: #27ae60;
-    font-size: 0.65rem;
-    animation: pulse 1.5s infinite;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.3; }
-}
-span.worker-name  { font-weight: 600; color: #1a1a2e; }
-span.worker-desc  { color: #777; }
-span.worker-icon  { font-size: 1rem; }
-
-/* ══════════════════════════════════════════════════
-   DASHBOARD BANNER
-══════════════════════════════════════════════════ */
-div.dashboard-banner {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 24px;
-    border-radius: 10px;
-    font-size: 0.92rem;
-}
-div.banner-running {
-    background: linear-gradient(135deg, #e8f8f0, #d4f5e2);
-    border: 1.5px solid #27ae60;
-}
-div.banner-stopped {
-    background: #fdf2f2;
-    border: 1.5px solid #e74c3c;
-}
-span.banner-title  { font-size: 1rem; font-weight: 600; flex: 1; }
-span.banner-time   { color: #777; font-size: 0.8rem; }
-span.banner-hint   {
-    background: rgba(0,0,0,0.06);
-    border-radius: 20px;
-    padding: 3px 12px;
-    font-size: 0.78rem;
-    color: #555;
-}
-
-/* ══════════════════════════════════════════════════
-   METRIC CARDS
-══════════════════════════════════════════════════ */
-div.metric-card {
-    background: #FFFFFF;
-    border-radius: 12px;
-    padding: 20px 16px;
-    text-align: center;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.07);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    min-height: 130px;
-}
-div.metric-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 6px 20px rgba(0,0,0,0.11);
-}
-div.metric-icon  { font-size: 1.6rem; margin-bottom: 6px; }
-div.metric-value {
-    font-size: 2rem;
-    font-weight: 700;
-    line-height: 1.1;
+.premium-card .card-value {
+    font-size: 2.2rem;
+    font-weight: 800;
+    color: #00ff88;
+    line-height: 1;
     margin-bottom: 4px;
 }
-div.metric-label {
-    font-size: 0.78rem;
-    font-weight: 500;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+.premium-card .card-sub {
+    font-size: 0.75rem;
+    color: #8b949e;
 }
 
-/* ══════════════════════════════════════════════════
-   WORKER CARDS (dashboard grid)
-══════════════════════════════════════════════════ */
-div.worker-card {
-    background: #FFFFFF;
+/* ── STATUS BADGE ── */
+.badge-running {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(0,255,136,0.1);
+    border: 1px solid #00ff88;
+    color: #00ff88;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+.badge-stopped {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(239,68,68,0.1);
+    border: 1px solid #ef4444;
+    color: #ef4444;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+.pulse { animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ── TERMINAL ── */
+.terminal-box {
+    background: #010409;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px 18px;
+    max-height: 380px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    line-height: 1.7;
+    color: #8b949e;
+}
+.terminal-box .log-success { color: #00ff88; }
+.terminal-box .log-error   { color: #ef4444; }
+.terminal-box .log-info    { color: #58a6ff; }
+
+/* ── PLUGIN ROW ── */
+.plugin-row {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: border-color 0.2s;
+}
+.plugin-row:hover { border-color: #00ff88; }
+.plugin-badge {
+    background: rgba(0,255,136,0.1);
+    color: #00ff88;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* ── PROGRESS BAR ── */
+.prog-bar-bg {
+    background: #21262d;
+    border-radius: 4px;
+    height: 6px;
+    width: 100%;
+    overflow: hidden;
+}
+.prog-bar-fill {
+    height: 6px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #00c96b, #00ff88);
+}
+
+/* ── WORKER CARD ── */
+.worker-card {
+    background: #161b22;
+    border: 1px solid #21262d;
     border-radius: 10px;
     padding: 14px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    min-height: 110px;
+    height: 120px;
     position: relative;
-    margin-bottom: 4px;
+    overflow: hidden;
 }
-div.wc-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 8px;
-}
-span.wc-icon   { font-size: 1rem; }
-span.wc-label  { font-size: 0.78rem; font-weight: 700; color: #1a1a2e; flex: 1; }
-span.wc-dot    { font-size: 0.8rem; }
-div.wc-msg     { font-size: 0.75rem; color: #555; line-height: 1.4; margin-bottom: 8px; }
-div.wc-ts      {
-    font-size: 0.68rem;
-    color: #aaa;
-    position: absolute;
-    bottom: 10px;
-    right: 12px;
+.worker-card.active { border-color: rgba(0,255,136,0.4); }
+.worker-card .wc-name { font-size: 0.75rem; font-weight: 700; color: #e2e8f0; }
+.worker-card .wc-status { font-size: 0.68rem; color: #8b949e; margin-top: 4px; }
+.worker-card .wc-count {
+    position: absolute; bottom: 12px; right: 12px;
+    font-size: 1.4rem; font-weight: 800; color: #00ff88;
 }
 
-/* ══════════════════════════════════════════════════
-   TERMINAL CONSOLE
-══════════════════════════════════════════════════ */
-div.terminal-box {
-    background: #0d1117;
-    border-radius: 10px;
-    border: 1px solid #30363d;
-    padding: 16px 20px;
-    max-height: 420px;
-    overflow-y: auto;
-    box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);
+/* ── SECTION HEADER ── */
+.section-hdr {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #21262d;
 }
-pre.terminal-text {
-    color: #c9d1d9;
-    font-family: 'Cascadia Code', 'Fira Code', 'Courier New', monospace !important;
-    font-size: 0.78rem !important;
-    line-height: 1.6;
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
+.section-hdr .sicon { font-size: 1.1rem; }
+.section-hdr .stitle {
+    font-size: 1rem; font-weight: 700; color: #e2e8f0;
 }
-/* Colour success lines green, error lines red */
-pre.terminal-text:has(✅) { color: #3fb950; }
-
-p.log-count-label {
-    color: #aaa;
-    font-size: 0.78rem;
-    margin-bottom: 6px;
+.section-hdr .sbadge {
+    background: rgba(0,255,136,0.1);
+    color: #00ff88;
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-left: auto;
 }
-
-/* ══════════════════════════════════════════════════
-   ALERTS / SUCCESS / INFO
-══════════════════════════════════════════════════ */
-div[data-testid="stAlert"] {
-    border-radius: 8px !important;
-    font-size: 0.87rem !important;
-}
-
-/* ══════════════════════════════════════════════════
-   SLIDER
-══════════════════════════════════════════════════ */
-div[data-testid="stSlider"] div[role="slider"] {
-    background-color: #27ae60 !important;
-}
-div[data-testid="stSlider"] div[data-baseweb="slider"] div {
-    background-color: #27ae60 !important;
-}
-
-/* ══════════════════════════════════════════════════
-   SCROLLBAR (webkit)
-══════════════════════════════════════════════════ */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 3px; }
-::-webkit-scrollbar-thumb {
-    background: #27ae60;
-    border-radius: 3px;
-    opacity: 0.7;
-}
-::-webkit-scrollbar-thumb:hover { background: #1e8449; }
-
-/* Terminal scrollbar */
-div.terminal-box::-webkit-scrollbar-track { background: #161b22; }
-div.terminal-box::-webkit-scrollbar-thumb { background: #30363d; }
-
-/* ══════════════════════════════════════════════════
-   HIDE STREAMLIT BRANDING
-══════════════════════════════════════════════════ */
-#MainMenu  { visibility: hidden; }
-footer     { visibility: hidden; }
-header     { visibility: hidden; }
-
 </style>
-"""
+""", unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BOOTSTRAP
-# ─────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────────
+# Bootstrap
+# ─────────────────────────────────────────────────────────────────
 def _bootstrap() -> EngineManager:
-    """
-    One-time setup on the very first script run per session:
-      1. Initialise the SQLite schema.
-      2. Create and cache the EngineManager singleton in session_state.
-
-    Returns the EngineManager so the rest of the app can use it.
-    """
     db.init_db()
-
     if "engine" not in st.session_state:
         st.session_state["engine"] = EngineManager()
-
     return st.session_state["engine"]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _render_header(engine: EngineManager) -> None:
-    """Render the branded top header bar."""
-    status_text = engine.get_status_line()
-    st.markdown(
-        f"""
-        <div class="app-header">
-            <div class="app-header-left">
-                <span class="app-header-logo">🚀</span>
-                <div>
-                    <p class="app-header-title">AI Marketing Engine</p>
-                    <p class="app-header-subtitle">
-                        24/7 Automated Lead Generation &amp; Plugin Promotion
-                    </p>
-                </div>
+# ─────────────────────────────────────────────────────────────────
+# Sidebar
+# ─────────────────────────────────────────────────────────────────
+def _render_sidebar(engine: EngineManager) -> str:
+    with st.sidebar:
+        # Logo
+        st.markdown("""
+        <div style="padding:20px 10px 24px;">
+            <div style="font-size:1.6rem;font-weight:800;color:#00ff88;letter-spacing:-1px;">
+                🚀 MarketEngine
             </div>
-            <div class="app-header-status">{status_text}</div>
+            <div style="font-size:0.72rem;color:#8b949e;margin-top:2px;">
+                AI-Powered 24/7 Lead Generation
+            </div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        """, unsafe_allow_html=True)
+
+        # Engine status
+        is_running = engine.is_running
+        if is_running:
+            st.markdown('<div class="badge-running"><span class="pulse">●</span> ENGINE LIVE</div>',
+                        unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="badge-stopped">● ENGINE STOPPED</div>',
+                        unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Navigation
+        st.markdown("<div style='font-size:0.7rem;color:#8b949e;font-weight:700;letter-spacing:1px;padding:0 4px;margin-bottom:6px;'>NAVIGATION</div>",
+                    unsafe_allow_html=True)
+        page = st.radio(
+            "",
+            ["📊  Dashboard", "🔌  Plugin Analytics", "⚙️  Settings", "📋  Live Logs"],
+            label_visibility="collapsed",
+        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Quick stats
+        metrics = db.get_metrics()
+        total = sum(metrics.values())
+        st.markdown(f"""
+        <div style="background:#0a0e14;border:1px solid #21262d;border-radius:10px;padding:14px;">
+            <div style="font-size:0.68rem;color:#8b949e;font-weight:700;letter-spacing:1px;margin-bottom:10px;">QUICK STATS</div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                <span style="font-size:0.75rem;color:#8b949e;">Total Actions</span>
+                <span style="font-size:0.75rem;color:#00ff88;font-weight:700;">{total:,}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                <span style="font-size:0.75rem;color:#8b949e;">Forms Filled</span>
+                <span style="font-size:0.75rem;color:#e2e8f0;font-weight:600;">{metrics['forms_filled']:,}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                <span style="font-size:0.75rem;color:#8b949e;">Comments</span>
+                <span style="font-size:0.75rem;color:#e2e8f0;font-weight:600;">{metrics['comments_posted']:,}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+                <span style="font-size:0.75rem;color:#8b949e;">Pingbacks</span>
+                <span style="font-size:0.75rem;color:#e2e8f0;font-weight:600;">{metrics['pingbacks_sent']:,}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Active Groq key
+        keys = db.get_all_api_keys()
+        active_keys = sum(1 for v in keys.values() if v.strip())
+        st.markdown(f"""
+        <div style="font-size:0.72rem;color:#8b949e;padding:0 2px;">
+            🔑 <span style="color:#e2e8f0;">{active_keys}/3</span> Groq keys active<br>
+            🤖 <span style="color:#00ff88;font-family:monospace;font-size:0.68rem;">llama-3.3-70b-versatile</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    return page
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────
+def main():
+    engine = _bootstrap()
+    page = _render_sidebar(engine)
 
-def main() -> None:
-    # 1. Inject CSS
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-    # 2. Hugging Face first-run banner
+    # HF welcome banner
     if IS_HF_SPACE:
         db.init_db()
         keys = db.get_all_api_keys()
-        no_keys = not any(v.strip() for v in keys.values())
-        if no_keys:
-            st.markdown(
-                """
-                <div style="background:#fffbea;border:1.5px solid #f0c040;border-radius:10px;
-                            padding:14px 20px;margin-bottom:1rem;font-size:0.88rem;">
-                    👋 <strong>Welcome to AI Marketing Engine on Hugging Face!</strong><br>
-                    To get started: go to the <strong>⚙️ Settings</strong> tab,
-                    enter your <a href="https://console.groq.com" target="_blank"
-                    style="color:#27ae60;">Groq API key</a> (free),
-                    add at least one plugin, then click <strong>🚀 Start Engine</strong>.
-                    <br><em>Your data is saved to persistent storage — it survives restarts.</em>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+        if not any(v.strip() for v in keys.values()):
+            st.info("👋 **Welcome!** Go to ⚙️ Settings → add your [Groq API key](https://console.groq.com) → add a plugin → Start Engine.")
 
-    # 3. Bootstrap DB + engine singleton
-    engine = _bootstrap()
-
-    # 4. Branded header
-    _render_header(engine)
-
-    # 5. Main tabs
-    tab_settings, tab_dashboard = st.tabs([
-        "⚙️  Settings & Configuration",
-        "📊  Live Dashboard & Logs",
-    ])
-
-    with tab_settings:
-        render_settings_tab(engine)
-
-    with tab_dashboard:
+    # Page router
+    clean = page.split("  ")[-1]
+    if clean == "Dashboard":
         render_dashboard_tab(engine)
+    elif clean == "Plugin Analytics":
+        from ui_analytics import render_analytics_tab
+        render_analytics_tab()
+    elif clean == "Settings":
+        render_settings_tab(engine)
+    elif clean == "Live Logs":
+        from ui_logs import render_logs_tab
+        render_logs_tab()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()

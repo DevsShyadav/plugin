@@ -270,6 +270,7 @@ async def worker_contact_sniper(
                         await page.wait_for_timeout(3000)
 
                         db.increment_metric("forms_filled")
+                        db.record_plugin_action(plugin["id"], "contact_form", "submitted", contact_url)
                         _log(
                             WORKER,
                             f"✅ Form submitted at {contact_url} for plugin '{plugin['name']}'",
@@ -375,6 +376,7 @@ async def worker_blog_bomber(
                         await page.wait_for_timeout(4000)
 
                         db.increment_metric("comments_posted")
+                        db.record_plugin_action(plugin["id"], "blog_comment", "commented", target_url)
                         _log(
                             WORKER,
                             f"✅ Comment posted on {target_url} for '{plugin['name']}'",
@@ -520,6 +522,7 @@ async def worker_youtube_hijacker(
                         await page.wait_for_timeout(3000)
 
                         db.increment_metric("comments_posted")
+                        db.record_plugin_action(plugin["id"], "youtube", "commented", video_url)
                         _log(
                             WORKER,
                             f"✅ YouTube comment posted on video {video_id} for '{plugin['name']}'",
@@ -610,6 +613,7 @@ async def worker_pingback_engine(
 
                     if success:
                         db.increment_metric("pingbacks_sent")
+                        db.record_plugin_action(plugin["id"], "pingback", "sent", target_url)
                         _log(
                             WORKER,
                             f"✅ Pingback sent: {source_url} → {target_url}",
@@ -779,6 +783,7 @@ async def worker_reddit_sniper(
 
                     if posted:
                         db.increment_metric("comments_posted")
+                        db.record_plugin_action(plugin["id"], "reddit", "replied", post_url)
                         _log(
                             WORKER,
                             f"✅ Reddit reply posted on '{post_title[:50]}' for '{plugin['name']}'",
