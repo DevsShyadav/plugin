@@ -41,6 +41,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL   = "llama-3.3-70b-versatile"   # latest supported Groq model
 FALLBACK_MODEL  = "llama-3.1-8b-instant"      # fast fallback
+
+# Patch: older groq versions pass 'proxies' to httpx which is removed in httpx>=0.28
+# This ensures compatibility across versions
+import httpx as _httpx
+try:
+    _orig_init = _httpx.AsyncClient.__init__
+    def _patched_init(self, *args, **kwargs):
+        kwargs.pop("proxies", None)
+        _orig_init(self, *args, **kwargs)
+    _httpx.AsyncClient.__init__ = _patched_init
+except Exception:
+    pass
 MAX_TOKENS      = 300                   # keep responses concise
 TEMPERATURE     = 0.75                  # slight creativity, but grounded
 
