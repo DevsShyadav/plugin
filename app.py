@@ -280,9 +280,10 @@ div[data-testid="stSelectbox"] > div {
 
 def _bootstrap() -> EngineManager:
     db.init_db()
-    if "engine" not in st.session_state:
-        st.session_state["engine"] = EngineManager()
-    return st.session_state["engine"]
+    # Use module-level global engine (survives Streamlit re-runs & session resets)
+    # This means workers keep running even when the page auto-refreshes
+    from engine import get_engine
+    return get_engine()
 
 
 def _render_sidebar(engine: EngineManager) -> str:

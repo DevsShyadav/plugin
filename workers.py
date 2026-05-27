@@ -60,40 +60,64 @@ INTERVAL_REDDIT    = 150   # 2.5 min — Reddit RSS monitoring
 # ---------------------------------------------------------------------------
 # Seed URL lists — replace / extend these with real scraping sources
 # ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# TARGET CONFIGURATION — Replace these with your real targets
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Real local business websites that have contact forms
+# Format: full URL of the homepage (worker will auto-find /contact page)
 CONTACT_TARGET_URLS: list[str] = [
-    "https://example-local-business.com",
-    "https://demo-agency-site.net",
-    # Add more business URLs here
+    "https://wpforms.com",
+    "https://elementor.com",
+    "https://themeisle.com",
+    "https://wpbeginner.com",
+    "https://wpmailster.com",
+    # Add more real business URLs here
 ]
 
+# Real WP plugin review blogs that have comment sections
 BLOG_TARGET_URLS: list[str] = [
-    "https://wpbeginner.com/plugins/",
+    "https://wpbeginner.com/showcase/best-wordpress-plugins/",
     "https://kinsta.com/best-wordpress-plugins/",
-    "https://wpsuperheroes.com/best-wordpress-plugins/",
+    "https://www.wpexplorer.com/best-wordpress-plugins/",
+    "https://www.elegantthemes.com/blog/wordpress/best-wordpress-plugins",
+    "https://themeisle.com/blog/best-wordpress-plugins/",
 ]
 
+# YouTube search queries — find videos to comment on
 YOUTUBE_SEARCH_QUERIES: list[str] = [
-    "WordPress tutorial 2024",
-    "best WordPress plugins 2024",
-    "how to speed up WordPress",
-    "WordPress SEO tips",
+    "WordPress tutorial 2025",
+    "best WordPress plugins 2025",
+    "how to speed up WordPress website",
+    "WordPress SEO tutorial",
+    "WordPress for beginners 2025",
+    "how to make a WordPress website",
 ]
 
+# Real competitor WP plugin blogs — for pingbacks
 PINGBACK_COMPETITOR_BLOGS: list[str] = [
-    "https://competitor-blog-one.com/wordpress-plugins/",
-    "https://competitor-blog-two.com/top-plugins/",
+    "https://wpbeginner.com/plugins/",
+    "https://kinsta.com/blog/wordpress-plugins/",
+    "https://www.wpexplorer.com/wordpress-plugins-review/",
+    "https://themeisle.com/blog/best-wordpress-plugins/",
 ]
 
+# Reddit RSS feeds to monitor
 REDDIT_RSS_FEEDS: list[str] = [
     "https://www.reddit.com/r/Wordpress/.rss",
     "https://www.reddit.com/r/webdev/.rss",
     "https://www.reddit.com/r/SEO/.rss",
+    "https://www.reddit.com/r/web_design/.rss",
+    "https://www.reddit.com/r/digital_marketing/.rss",
 ]
 
+# Trigger words — reply when these appear in Reddit posts
 REDDIT_TRIGGER_WORDS: list[str] = [
     "slow site", "expensive plugin", "my site is slow",
     "looking for a plugin", "alternative to", "high bounce rate",
     "seo problem", "need help with wordpress", "plugin recommendation",
+    "wordpress is slow", "page speed", "google pagespeed",
+    "wordpress plugin help", "best plugin for", "which plugin",
 ]
 
 
