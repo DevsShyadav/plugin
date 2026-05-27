@@ -6,6 +6,9 @@
 # UI
 streamlit==1.35.0
 
+# Live dashboard auto-refresh (smooth, no full page reload)
+streamlit-autorefresh==1.0.1
+
 # Groq AI — latest SDK (fixes AsyncClient proxies issue)
 groq==0.11.0
 

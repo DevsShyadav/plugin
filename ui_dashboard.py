@@ -24,8 +24,18 @@ PLATFORM_COLORS = {
 
 
 def render_dashboard_tab(engine: EngineManager) -> None:
-    if engine.is_running:
-        st.markdown('<meta http-equiv="refresh" content="8">', unsafe_allow_html=True)
+    # ── NO auto page-reload — use st_autorefresh for smooth live updates ──
+    # streamlit-autorefresh silently injects a JS interval that only
+    # re-runs the Streamlit script WITHOUT a full browser page reload.
+    # This keeps scroll position, open accordions, etc. intact.
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        if engine.is_running:
+            # Refresh every 5 seconds while engine is running
+            st_autorefresh(interval=5000, limit=None, key="dashboard_refresh")
+    except ImportError:
+        # streamlit-autorefresh not installed — show manual refresh button only
+        pass
 
     _engine_control(engine)
     st.markdown("---")
@@ -62,7 +72,7 @@ def _engine_control(engine: EngineManager) -> None:
                             All 5 Workers Running
                         </div>
                         <div style="font-size:0.75rem; color:#888; margin-top:2px;">
-                            Auto-refreshing every 8s &nbsp;·&nbsp; {now}
+                            Live — updates automatically every 5s
                         </div>
                     </div>
                 </div>
