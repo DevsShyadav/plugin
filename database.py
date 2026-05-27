@@ -1,13 +1,6 @@
 """
-database.py
-===========
-SQLite database layer — AI Marketing Dashboard
-Tables:
-    api_keys      — 3 Groq key slots
-    plugins       — plugin registry
-    plugin_stats  — per-plugin per-platform action tracking
-    activity_logs — timestamped worker log entries
-    metrics       — global running counters
+database.py — SQLite layer for AI Marketing Engine
+Tables: api_keys, plugins, plugin_stats, activity_logs, metrics
 """
 
 import sqlite3
@@ -17,9 +10,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-# ---------------------------------------------------------------------------
-# DB Path — uses /data on HF Spaces (persistent volume), else local
-# ---------------------------------------------------------------------------
+# DB path — /data on HF Spaces (persistent), else local
 _HF_DATA_DIR = "/data"
 if os.path.isdir(_HF_DATA_DIR) and os.access(_HF_DATA_DIR, os.W_OK):
     DB_PATH = os.path.join(_HF_DATA_DIR, "marketing_engine.db")
@@ -42,7 +33,6 @@ def init_db() -> None:
     conn = get_connection()
     c = conn.cursor()
 
-    # API Keys
     c.execute("""
         CREATE TABLE IF NOT EXISTS api_keys (
             slot    INTEGER PRIMARY KEY,
@@ -52,7 +42,6 @@ def init_db() -> None:
     for slot in (1, 2, 3):
         c.execute("INSERT OR IGNORE INTO api_keys (slot, key_val) VALUES (?, ?)", (slot, ""))
 
-    # Plugins
     c.execute("""
         CREATE TABLE IF NOT EXISTS plugins (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,20 +52,31 @@ def init_db() -> None:
         )
     """)
 
-    # Per-plugin per-platform stats  ← NEW
+    # plugin_stats — every action with full URL + generated text
     c.execute("""
         CREATE TABLE IF NOT EXISTS plugin_stats (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            plugin_id   INTEGER NOT NULL,
-            platform    TEXT NOT NULL,
-            action      TEXT NOT NULL,
-            target_url  TEXT NOT NULL DEFAULT '',
-            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            plugin_id      INTEGER NOT NULL,
+            platform       TEXT NOT NULL,
+            action         TEXT NOT NULL,
+            target_url     TEXT NOT NULL DEFAULT '',
+            generated_text TEXT NOT NULL DEFAULT '',
+            status         TEXT NOT NULL DEFAULT 'success',
+            created_at     TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (plugin_id) REFERENCES plugins(id) ON DELETE CASCADE
         )
     """)
 
-    # Activity logs
+    # Migrate old schema — add columns if missing
+    try:
+        c.execute("ALTER TABLE plugin_stats ADD COLUMN generated_text TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE plugin_stats ADD COLUMN status TEXT NOT NULL DEFAULT 'success'")
+    except Exception:
+        pass
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS activity_logs (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +87,6 @@ def init_db() -> None:
         )
     """)
 
-    # Global metrics
     c.execute("""
         CREATE TABLE IF NOT EXISTS metrics (
             id              INTEGER PRIMARY KEY DEFAULT 1,
@@ -100,9 +99,7 @@ def init_db() -> None:
     conn.commit()
 
 
-# ---------------------------------------------------------------------------
-# Obfuscation
-# ---------------------------------------------------------------------------
+# ── Obfuscation ─────────────────────────────────────────────────
 def _obfuscate(v: str) -> str:
     return base64.b64encode(v.encode()).decode() if v else ""
 
@@ -113,9 +110,7 @@ def _deobfuscate(v: str) -> str:
         return v
 
 
-# ---------------------------------------------------------------------------
-# API Keys
-# ---------------------------------------------------------------------------
+# ── API Keys ────────────────────────────────────────────────────
 def save_api_key(slot: int, key_value: str) -> None:
     conn = get_connection()
     conn.execute("UPDATE api_keys SET key_val = ? WHERE slot = ?", (_obfuscate(key_value), slot))
@@ -129,9 +124,7 @@ def get_all_api_keys() -> dict:
     return {slot: get_api_key(slot) for slot in (1, 2, 3)}
 
 
-# ---------------------------------------------------------------------------
-# Plugins
-# ---------------------------------------------------------------------------
+# ── Plugins ─────────────────────────────────────────────────────
 def add_plugin(name: str, shortlink: str, description: str) -> int:
     conn = get_connection()
     cur = conn.execute(
@@ -153,47 +146,40 @@ def get_all_plugins() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-# ---------------------------------------------------------------------------
-# Plugin Stats  ← NEW — per-plugin per-platform tracking
-# ---------------------------------------------------------------------------
-def record_plugin_action(plugin_id: int, platform: str, action: str, target_url: str = "") -> None:
-    """
-    Record every action taken for a plugin.
-    platform: 'contact_form' | 'blog_comment' | 'youtube' | 'pingback' | 'reddit'
-    action:   'submitted'    | 'commented'    | 'commented'| 'sent'     | 'replied'
-    """
+# ── Plugin Stats ─────────────────────────────────────────────────
+def record_plugin_action(
+    plugin_id: int,
+    platform: str,
+    action: str,
+    target_url: str = "",
+    generated_text: str = "",
+    status: str = "success",
+) -> None:
     conn = get_connection()
     conn.execute(
-        "INSERT INTO plugin_stats (plugin_id, platform, action, target_url) VALUES (?, ?, ?, ?)",
-        (plugin_id, platform, action, target_url)
+        "INSERT INTO plugin_stats "
+        "(plugin_id, platform, action, target_url, generated_text, status) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (plugin_id, platform, action, target_url, generated_text, status)
     )
     conn.commit()
 
 def get_plugin_stats(plugin_id: int) -> dict:
-    """
-    Returns stats for a single plugin:
-    {
-        'total': int,
-        'by_platform': {'contact_form': n, 'blog_comment': n, ...},
-        'recent': [{'platform', 'action', 'target_url', 'created_at'}, ...]
-    }
-    """
     conn = get_connection()
-
     total_row = conn.execute(
         "SELECT COUNT(*) as cnt FROM plugin_stats WHERE plugin_id = ?", (plugin_id,)
     ).fetchone()
     total = total_row["cnt"] if total_row else 0
 
     platform_rows = conn.execute(
-        "SELECT platform, COUNT(*) as cnt FROM plugin_stats WHERE plugin_id = ? GROUP BY platform",
-        (plugin_id,)
+        "SELECT platform, COUNT(*) as cnt FROM plugin_stats "
+        "WHERE plugin_id = ? GROUP BY platform", (plugin_id,)
     ).fetchall()
     by_platform = {r["platform"]: r["cnt"] for r in platform_rows}
 
     recent_rows = conn.execute(
-        "SELECT platform, action, target_url, created_at FROM plugin_stats "
-        "WHERE plugin_id = ? ORDER BY id DESC LIMIT 20",
+        "SELECT platform, action, target_url, generated_text, status, created_at "
+        "FROM plugin_stats WHERE plugin_id = ? ORDER BY id DESC LIMIT 50",
         (plugin_id,)
     ).fetchall()
     recent = [dict(r) for r in recent_rows]
@@ -201,23 +187,17 @@ def get_plugin_stats(plugin_id: int) -> dict:
     return {"total": total, "by_platform": by_platform, "recent": recent}
 
 def get_all_plugin_stats_summary() -> list[dict]:
-    """
-    Returns a summary row per plugin joining plugins + plugin_stats counts.
-    Used for the dashboard overview table.
-    """
     conn = get_connection()
     rows = conn.execute("""
         SELECT
-            p.id,
-            p.name,
-            p.shortlink,
-            COUNT(ps.id)                                        AS total_actions,
-            SUM(CASE WHEN ps.platform='contact_form'  THEN 1 ELSE 0 END) AS forms,
-            SUM(CASE WHEN ps.platform='blog_comment'  THEN 1 ELSE 0 END) AS blog_comments,
-            SUM(CASE WHEN ps.platform='youtube'       THEN 1 ELSE 0 END) AS yt_comments,
-            SUM(CASE WHEN ps.platform='pingback'      THEN 1 ELSE 0 END) AS pingbacks,
-            SUM(CASE WHEN ps.platform='reddit'        THEN 1 ELSE 0 END) AS reddit_replies,
-            MAX(ps.created_at)                                  AS last_action
+            p.id, p.name, p.shortlink,
+            COUNT(ps.id)                                                   AS total_actions,
+            SUM(CASE WHEN ps.platform='contact_form'  THEN 1 ELSE 0 END)  AS forms,
+            SUM(CASE WHEN ps.platform='blog_comment'  THEN 1 ELSE 0 END)  AS blog_comments,
+            SUM(CASE WHEN ps.platform='youtube'       THEN 1 ELSE 0 END)  AS yt_comments,
+            SUM(CASE WHEN ps.platform='pingback'      THEN 1 ELSE 0 END)  AS pingbacks,
+            SUM(CASE WHEN ps.platform='reddit'        THEN 1 ELSE 0 END)  AS reddit_replies,
+            MAX(ps.created_at)                                             AS last_action
         FROM plugins p
         LEFT JOIN plugin_stats ps ON ps.plugin_id = p.id
         GROUP BY p.id
@@ -226,29 +206,37 @@ def get_all_plugin_stats_summary() -> list[dict]:
     return [dict(r) for r in rows]
 
 def get_platform_totals() -> dict:
-    """Global totals across all plugins by platform."""
-    conn = get_connection()
-    rows = conn.execute(
+    rows = get_connection().execute(
         "SELECT platform, COUNT(*) as cnt FROM plugin_stats GROUP BY platform"
     ).fetchall()
     return {r["platform"]: r["cnt"] for r in rows}
 
-def get_daily_activity(days: int = 14) -> list[dict]:
-    """Returns daily action counts for the last N days (for sparkline chart)."""
+def get_all_actions(limit: int = 200, platform_filter: str = "") -> list[dict]:
+    """All actions across all plugins, newest first — used by Reports page."""
     conn = get_connection()
-    rows = conn.execute("""
-        SELECT DATE(created_at) as day, COUNT(*) as cnt
-        FROM plugin_stats
-        WHERE created_at >= DATE('now', ? || ' days')
-        GROUP BY day
-        ORDER BY day ASC
-    """, (f"-{days}",)).fetchall()
+    if platform_filter:
+        rows = conn.execute("""
+            SELECT ps.id, ps.plugin_id, p.name AS plugin_name, p.shortlink,
+                   ps.platform, ps.action, ps.target_url,
+                   ps.generated_text, ps.status, ps.created_at
+            FROM plugin_stats ps
+            JOIN plugins p ON p.id = ps.plugin_id
+            WHERE ps.platform = ?
+            ORDER BY ps.id DESC LIMIT ?
+        """, (platform_filter, limit)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT ps.id, ps.plugin_id, p.name AS plugin_name, p.shortlink,
+                   ps.platform, ps.action, ps.target_url,
+                   ps.generated_text, ps.status, ps.created_at
+            FROM plugin_stats ps
+            JOIN plugins p ON p.id = ps.plugin_id
+            ORDER BY ps.id DESC LIMIT ?
+        """, (limit,)).fetchall()
     return [dict(r) for r in rows]
 
 
-# ---------------------------------------------------------------------------
-# Activity Logs
-# ---------------------------------------------------------------------------
+# ── Activity Logs ────────────────────────────────────────────────
 def add_log(worker: str, message: str, status: str = "info") -> None:
     conn = get_connection()
     conn.execute(
@@ -288,17 +276,14 @@ def get_logs_as_text(limit: int = 100) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Global Metrics
-# ---------------------------------------------------------------------------
+# ── Global Metrics ───────────────────────────────────────────────
 def increment_metric(field: str, amount: int = 1) -> None:
     allowed = {"forms_filled", "comments_posted", "pingbacks_sent"}
     if field not in allowed:
         raise ValueError(f"Invalid metric: {field}")
-    get_connection().execute(
-        f"UPDATE metrics SET {field} = {field} + ? WHERE id = 1", (amount,)
-    )
-    get_connection().commit()
+    conn = get_connection()
+    conn.execute(f"UPDATE metrics SET {field} = {field} + ? WHERE id = 1", (amount,))
+    conn.commit()
 
 def get_metrics() -> dict:
     row = get_connection().execute(

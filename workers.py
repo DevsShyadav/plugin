@@ -284,17 +284,19 @@ async def worker_contact_sniper(
                         await page.wait_for_load_state("networkidle", timeout=15000)
 
                         # TODO: Replace selectors below with real site selectors
-                        # Common patterns:  input[name="name"], #your-name, .contact-name
                         await page.fill('input[name="name"]', "Alex Johnson")          # TODO
                         await page.fill('input[name="email"]', "alex@marketingpro.io") # TODO
                         await page.fill('textarea[name="message"]', pitch)              # TODO
-
-                        # TODO: Update submit selector to match the target form
-                        await page.click('button[type="submit"]')  # TODO
+                        await page.click('button[type="submit"]')                       # TODO
                         await page.wait_for_timeout(3000)
 
                         db.increment_metric("forms_filled")
-                        db.record_plugin_action(plugin["id"], "contact_form", "submitted", contact_url)
+                        db.record_plugin_action(
+                            plugin["id"], "contact_form", "submitted",
+                            target_url=contact_url,
+                            generated_text=pitch,
+                            status="success",
+                        )
                         _log(
                             WORKER,
                             f"✅ Form submitted at {contact_url} for plugin '{plugin['name']}'",
@@ -400,7 +402,12 @@ async def worker_blog_bomber(
                         await page.wait_for_timeout(4000)
 
                         db.increment_metric("comments_posted")
-                        db.record_plugin_action(plugin["id"], "blog_comment", "commented", target_url)
+                        db.record_plugin_action(
+                            plugin["id"], "blog_comment", "commented",
+                            target_url=target_url,
+                            generated_text=comment_text,
+                            status="success",
+                        )
                         _log(
                             WORKER,
                             f"✅ Comment posted on {target_url} for '{plugin['name']}'",
@@ -546,7 +553,12 @@ async def worker_youtube_hijacker(
                         await page.wait_for_timeout(3000)
 
                         db.increment_metric("comments_posted")
-                        db.record_plugin_action(plugin["id"], "youtube", "commented", video_url)
+                        db.record_plugin_action(
+                            plugin["id"], "youtube", "commented",
+                            target_url=video_url,
+                            generated_text=comment_text,
+                            status="success",
+                        )
                         _log(
                             WORKER,
                             f"✅ YouTube comment posted on video {video_id} for '{plugin['name']}'",
@@ -637,7 +649,12 @@ async def worker_pingback_engine(
 
                     if success:
                         db.increment_metric("pingbacks_sent")
-                        db.record_plugin_action(plugin["id"], "pingback", "sent", target_url)
+                        db.record_plugin_action(
+                            plugin["id"], "pingback", "sent",
+                            target_url=target_url,
+                            generated_text=f"Source: {source_url}",
+                            status="success",
+                        )
                         _log(
                             WORKER,
                             f"✅ Pingback sent: {source_url} → {target_url}",
@@ -807,16 +824,28 @@ async def worker_reddit_sniper(
 
                     if posted:
                         db.increment_metric("comments_posted")
-                        db.record_plugin_action(plugin["id"], "reddit", "replied", post_url)
+                        db.record_plugin_action(
+                            plugin["id"], "reddit", "replied",
+                            target_url=post_url,
+                            generated_text=reply_text,
+                            status="success",
+                        )
                         _log(
                             WORKER,
                             f"✅ Reddit reply posted on '{post_title[:50]}' for '{plugin['name']}'",
                             "success",
                         )
                     else:
+                        # Log dry-run — reply text generated but not posted yet
+                        db.record_plugin_action(
+                            plugin["id"], "reddit", "generated",
+                            target_url=post_url,
+                            generated_text=reply_text,
+                            status="dry_run",
+                        )
                         _log(
                             WORKER,
-                            f"Reddit reply posting not configured yet for: {post_url}",
+                            f"📝 Reddit reply generated (dry-run) for: {post_title[:50]}",
                             "info",
                         )
 

@@ -315,6 +315,7 @@ def _render_sidebar(engine: EngineManager) -> str:
 
         page = st.radio("", [
             "📊  Dashboard",
+            "📈  Reports",
             "🔌  Plugin Analytics",
             "⚙️  Settings",
             "📋  Live Logs",
@@ -376,6 +377,9 @@ def main():
 
     if clean == "Dashboard":
         render_dashboard_tab(engine)
+    elif clean == "Reports":
+        from ui_reports import render_reports_tab
+        render_reports_tab()
     elif clean == "Plugin Analytics":
         from ui_analytics import render_analytics_tab
         render_analytics_tab()
